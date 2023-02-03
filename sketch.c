@@ -2,26 +2,32 @@
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <Servo.h>
+#include <DHT.h>
+#include <Adafruit_Sensor.h>
 
 
 // Replace with your network credentials
 const char* ssid = "dgubo";
 const char* password = "123456789";
 
-//bool ledState = 0; // ZA prijasnji primjer 
-//const int ledPin = 4; // ZA prijasnji primjer 
-// Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
 Servo servo;
 int angle = 10;
-int greenLED =4;
+int greenLED =5;
 int redLED = 0;
-int inputPin = 5;               // choose the input pin (for PIR sensor)
+int inputPin = 4;               // choose the input pin (for PIR sensor)
 int pirState = LOW;             // we start, assuming no motion detected
 int val = 0;
 int count = 0;
+int dhtPin = 14;
+DHT dht(dhtPin, DHT11);
+float temp=0.0;
+unsigned long previousMillis = 0; 
+const long interval = 10000;
+
+
 
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE HTML><html>
@@ -39,7 +45,6 @@ const char index_html[] PROGMEM = R"rawliteral(
     <div class="card">
       <h2>Kontrolne poruke</h2>
       <div class="state" id="table">
-        <p>okoko</p>
       </div>
     </div>
   </div>
@@ -61,22 +66,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     console.log('Connection closed');
     setTimeout(initWebSocket, 2000);
   }
-
   function onMessage(event) {
-    //Mozda tu moze biti neka greska oko parsiranja no nevj, pod to mislim event.data.toString() sa arduino strane
     var state;
-    var count=0;
     let paragraph = document.createElement("p");
-
-    if (event.data == "HIGH" && count==0){
-      state = "Korisnik se vraca u sobu";
-      count++;
-    }
-    if (event.data == "HIGH" && count==1){
-    state = "Korisnik se vraca u sobu";
-    count=0;
-    }
-    if (event.data == "0"){
+    if (event.data == "HITNO"){
       state=event.data;
       paragraph.style.color = "red";
     }
@@ -89,22 +82,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                 return dateTime;
             }
     
-    paragraph.innerHTML=time()+" "+state.toString();
+    paragraph.innerHTML=time()+" "+event.data;
     document.getElementById('table').prepend(paragraph);
-
   }
   function onLoad(event) {
     initWebSocket();
-    //initButton();
   }
-  /*function initButton() {
-    document.getElementById('button').addEventListener('click', toggle);
-  }
-  function toggle(){
-    websocket.send('toggle');
-  } */
 </script>
-
 <style>
     html {
       font-family: Arial, Helvetica, sans-serif;
@@ -122,7 +106,6 @@ const char index_html[] PROGMEM = R"rawliteral(
     .topnav {
       overflow: hidden;
       background-color: #143642;
-
     }
     .topnav img{
         margin-top: 2rem;
@@ -154,6 +137,7 @@ void handleWebSocketMessage(void *arg, uint8_t *data, size_t len) {
   }
 }
 
+// Client to Server side
 void onEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type,
              void *arg, uint8_t *data, size_t len) {
     switch (type) {
@@ -190,6 +174,7 @@ String processor(const String& var){
 }
 
 void setup(){
+  pinMode(12, INPUT);
   servo.attach(2);
   servo.write(angle);
   pinMode(inputPin, INPUT);     // declare sensor as input
@@ -198,7 +183,7 @@ void setup(){
   
   // Serial port for debugging purposes
   Serial.begin(115200);
-  
+  dht.begin();
   // Connect to Wi-Fi
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
@@ -223,6 +208,29 @@ void setup(){
 void loop() {
   ws.cleanupClients();
   
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    // save the last time you updated the DHT values
+    previousMillis = currentMillis;
+    // Read temperature as Celsius (the default)
+    float newT = dht.readTemperature();
+    // Read temperature as Fahrenheit (isFahrenheit = true)
+    //float newT = dht.readTemperature(true);
+    // if temperature read failed, don't change t value
+    if (isnan(newT)) {
+      Serial.println("Failed to read from DHT sensor!");
+    }
+    else {
+      temp = newT;
+      Serial.println(temp);
+      ws.textAll("Temperatura pacijenta je: "+String(temp)+" °C");
+    }
+  }
+
+  // Button press - higher priority
+  if(digitalRead(12)){
+    ws.textAll("HITNO");
+  }
   val = digitalRead(inputPin);
     if (val == HIGH)  // check if the input is HIGH
   {            
@@ -239,7 +247,16 @@ void loop() {
       } 
       Serial.println("Motion detected!"); // print on output change
       pirState = HIGH;
-      ws.textAll(String(pirState))
+      if(count==0){
+          ws.textAll("Korisnik je izašao iz sobe");
+          count=1;
+      } 
+      else if(count==1){
+        ws.textAll("Korisnik se vratio u sobu");
+        count=0;
+      } 
+      
+      
     }
      digitalWrite(greenLED, LOW);
      delay(2000);
